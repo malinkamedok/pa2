@@ -25,8 +25,11 @@ int send_multicast(void * self, const Message * msg) {
 int receive(void * self, local_id from, Message * msg) {
     baby_maybe_process * glb = (baby_maybe_process * ) self;
 
-    read(glb->global_elite->pipes_all[from][glb->id].fd[0], &msg->s_header, sizeof(MessageHeader));
-    read(glb->global_elite->pipes_all[from][glb->id].fd[0], &msg->s_payload, msg->s_header.s_payload_len);
+    int read_header_result = read(glb->global_elite->pipes_all[from][glb->id].fd[0], &msg->s_header, sizeof(MessageHeader));
+    int read_body_result = read(glb->global_elite->pipes_all[from][glb->id].fd[0], &msg->s_payload, msg->s_header.s_payload_len);
+    if (read_header_result == -1 || read_body_result == -1) {
+        return -1;
+    }
 
     return 0;
 }

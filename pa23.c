@@ -28,7 +28,7 @@ void transfer(void * parent_data, local_id src, local_id dst, balance_t amount)
         message_transfer_send.s_payload[i] = send_message[i];
     }
 
-    send(pipesAllGlobal, dst, &message_transfer_send);
+    send(pipesAllGlobal, src, &message_transfer_send);
 
     Message message_transfer_receive;
 
@@ -103,6 +103,7 @@ int main(int argc, char * argv[])
 
     size_t process_number = 0;
 
+    //procs creation
     for (size_t count = 1; count < number_of_child_procs + 1; count++) {
         if (fork() == 0) {
             process_number = count;
@@ -180,10 +181,104 @@ int main(int argc, char * argv[])
             //log_received_all_started_fmt
             printf(log_received_all_started_fmt, get_physical_time(), (int ) process_number);
             fprintf(ev, log_received_all_started_fmt, get_physical_time(), (int ) process_number);
+            printf("trying to read stop msg\n");
+            Message stop_message_receive;
+            receive((void *) babyMaybeProcess, 0, &stop_message_receive);
+//            printf("stop msg: %d\n", stop_message_receive.s_header.s_type);
+            printf("stop received\n");
+            if (stop_message_receive.s_header.s_type == STOP) {
+                printf("stop msg received by %zu proc\n", process_number);
+            }
 
 
+            Message any_message_receive;
+            TransferOrder transferOrder;
+            int done_procs, stop_signal = 0;
+            while (1) {
+                while (receive_any(global, &any_message_receive) == -1) {}
+                switch (any_message_receive.s_header.s_type) {
+                    case TRANSFER:
+                        memcpy(&transferOrder, any_message_receive.s_payload, any_message_receive.s_header.s_payload_len);
+                        if (process_number == transferOrder.s_src) {
+                            timestamp_t time = get_physical_time();
+                            money_at_start[process_number-1] = money_at_start[process_number-1] - transferOrder.s_amount;
 
+                            char transfer_to_dst_char[75];
+                            sprintf(transfer_to_dst_char, log_transfer_out_fmt, get_physical_time(), (int ) process_number, transferOrder.s_amount, transferOrder.s_dst);
 
+                            Message transfer_to_dst;
+                            MessageHeader messageHeader;
+                            messageHeader.s_magic = MESSAGE_MAGIC;
+                            messageHeader.s_payload_len = 75;
+                            messageHeader.s_local_time = get_physical_time();
+                            messageHeader.s_type = TRANSFER;
+                            transfer_to_dst.s_header = messageHeader;
+                            for (size_t i = 0; i < 75; i++) {
+                                transfer_to_dst.s_payload[i] = transfer_to_dst_char[i];
+                            }
+                            send(global, transferOrder.s_dst, &transfer_to_dst);
+                            any_message_receive.s_header.s_type = -1;
+                        } else if (process_number == transferOrder.s_dst) {
+                            timestamp_t time = get_physical_time();
+
+                            Message send_ack_msg;
+                            MessageHeader messageHeader;
+                            messageHeader.s_type = ACK;
+                            messageHeader.s_payload_len = 0;
+                            messageHeader.s_local_time = get_physical_time();
+                            messageHeader.s_magic = MESSAGE_MAGIC;
+                            send_ack_msg.s_header = messageHeader;
+
+                            send(global, 0, &send_ack_msg);
+                        } else {
+                            printf("msg receive fault");
+                        }
+                    case STOP:
+
+                        char transfer_to_dst_char[75];
+                        sprintf(transfer_to_dst_char, log_transfer_out_fmt, get_physical_time(), (int ) process_number, transferOrder.s_amount, transferOrder.s_dst);
+
+                        Message transfer_to_dst;
+                        MessageHeader messageHeader;
+                        messageHeader.s_magic = MESSAGE_MAGIC;
+                        messageHeader.s_payload_len = 75;
+                        messageHeader.s_local_time = get_physical_time();
+                        messageHeader.s_type = TRANSFER;
+                        transfer_to_dst.s_header = messageHeader;
+                        for (size_t i = 0; i < 75; i++) {
+                            transfer_to_dst.s_payload[i] = transfer_to_dst_char[i];
+                        }
+                        send(global, transferOrder.s_dst, &transfer_to_dst);
+
+//                        Message message_done_send;
+//                        MessageHeader messageHeader;
+//                        messageHeader.s_type = DONE;
+//                        messageHeader.s_payload_len = 75;
+//                        messageHeader.s_magic = MESSAGE_MAGIC;
+//                        messageHeader.s_local_time = get_physical_time();
+//                        message_done_send.s_header = messageHeader;
+//                        char message_done_char[75];
+//                        sprintf(message_done_char, log_done_fmt, get_physical_time(), (int )process_number, money_at_start[process_number-1]);
+//
+//                        for (size_t i = 0; i < 75; i++) {
+//                            message_done_send.s_payload[i] = message_done_char[i];
+//                        }
+//
+//                        send_multicast(global, &message_done_send);
+
+                        stop_signal = 1;
+                        if (done_procs == global->number_of_child_procs - 2) {
+                            //log all done
+                            break;
+                        }
+                    case DONE:
+                        done_procs = done_procs + 1;
+                        if (stop_signal == 1 && done_procs == global->number_of_child_procs - 2) {
+                            //log all done
+                            break;
+                        }
+                }
+            }
             exit(0);
         }
     }
@@ -197,6 +292,43 @@ int main(int argc, char * argv[])
     }
 
     bank_robbery(global, number_of_child_procs);
+
+    Message stop_message;
+    MessageHeader messageHeader;
+    messageHeader.s_type = STOP;
+    messageHeader.s_payload_len = 0;
+    messageHeader.s_local_time = get_physical_time();
+    messageHeader.s_magic = MESSAGE_MAGIC;
+    stop_message.s_header = messageHeader;
+
+    send_multicast(global, &stop_message);
+
+    for (size_t i = 1; i < number_of_child_procs + 1; i++) {
+        Message message;
+        read(global->pipes_all[i][0].fd[0], &message.s_header, sizeof(MessageHeader));
+        read(global->pipes_all[i][0].fd[0], message.s_payload, message.s_header.s_payload_len);
+        printf("parent received: %s from proc #%zu\n", message.s_payload, i);
+    }
+
+    //log all done
+
+
+//    bank_robbery(global, number_of_child_procs);
+
+//    for (size_t i = 1; i < number_of_child_procs+1; i++) {
+//
+//        Message done_message_send;
+//        MessageHeader messageHeader;
+//        messageHeader.s_type = STOP;
+//        messageHeader.s_magic = MESSAGE_MAGIC;
+//        messageHeader.s_local_time = get_physical_time();
+//        messageHeader.s_payload_len = sizeof(done_message_send);
+//        done_message_send.s_header = messageHeader;
+//
+//
+//        write(global->pipes_all[0][i].fd[1], &done_message_send, 8);
+//
+//    }
 
     fclose(ev);
     fclose(pi);
