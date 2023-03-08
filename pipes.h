@@ -2,6 +2,7 @@
 #define PA1_PIPES_H
 
 #include "mm_malloc.h"
+#include "banking.h"
 
 struct pipes {
     int fd[2];
@@ -10,6 +11,7 @@ struct pipes {
 typedef struct {
     size_t number_of_child_procs;
     struct pipes ** pipes_all;
+    BalanceHistory balanceHistory;
 } pipes_all_global;
 
 pipes_all_global * new(size_t number);
